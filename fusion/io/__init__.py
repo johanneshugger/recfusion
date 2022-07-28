@@ -1,0 +1,2 @@
+from .snap import load_snap_graph
+from .opengm_benchmark import load_opengm_benchmark
