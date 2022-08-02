@@ -25,15 +25,15 @@ class RecursiveFusionEnv:
         ngraph,
         edge_weights,
         pggraph,
-        proposal_solver=multicut_gaec,
-        subroutine_solver=multicut_gaec,
+        proposal_solver='multicut_gaec',
+        subroutine_solver='multicut_gaec',
         num_steps=100
     ):
         self.ngraph = ngraph
         self.weights = edge_weights
         self.pggraph = pggraph
-        self.proposal_solver = proposal_solver
-        self.subroutine_solver = subroutine_solver
+        self.proposal_solver = eval(proposal_solver)
+        self.subroutine_solver = eval(subroutine_solver)
         self.num_steps = num_steps
 
     def reset(self):
@@ -51,11 +51,11 @@ class RecursiveFusionEnv:
         return timestep
 
     def step(self, actions=None):
-        import time
-        t0 = time.time()
+        # Actions (probabilities) to costs
+        costs = np.log((1 - actions) / actions)
         self._step += 1
         proposal = self.proposal_solver(
-            self.ngraph, actions 
+            self.ngraph, costs
         )
         proposals = np.stack([self.current_solution, proposal])
         labels = ccfusion(self.ngraph, self.weights, proposals)
@@ -70,7 +70,6 @@ class RecursiveFusionEnv:
             observation=observation,
             discount=None
         )
-        print('time', time.time() - t0)
         return timestep
 
     def _observation(self, labels, reset_env=False):
@@ -83,7 +82,7 @@ class RecursiveFusionEnv:
         # Concatenate edge weights with edge labeling
         edge_attr = torch.stack(
             [self.pggraph.edge_attr.clone(), edge_labels], dim=1
-        )
+        ).to(torch.float32)
 
         if reset_env:
             edge_index = self.pggraph.edge_index.clone()
@@ -101,6 +100,8 @@ class RecursiveFusionEnv:
  
         return line_graph
 
+    def action_space_dim(self):
+        return self.pggraph.edge_attr.shape[0]
 
 if __name__ == '__main__':
     import random

@@ -7,16 +7,77 @@ import nifty
 import torch_geometric
 import pylab
 import elf
-from elf.segmentation.multicut import multicut_kernighan_lin
+from elf.segmentation.multicut import multicut_kernighan_lin, multicut_gaec
+from fusion.utils import pyg_to_nifty
 
 
-def pyg_to_nifty(pyg_graph):
-    ngraph = nifty.graph.undirectedGraph(pyg_graph.num_nodes)
-    uv_ids = pyg_graph.edge_index.T.numpy()
-    ngraph.insertEdges(uv_ids)
-    return ngraph
-    # nifty.graph.drawGraph(ngraph)
-    # pylab.show() 
+# def pyg_to_nifty(pyg_graph):
+#     ngraph = nifty.graph.undirectedGraph(pyg_graph.num_nodes)
+#     uv_ids = pyg_graph.edge_index.T.numpy()
+#     ngraph.insertEdges(uv_ids)
+#     return ngraph
+#     # nifty.graph.drawGraph(ngraph)
+#     # pylab.show() 
+
+def ccfusion(graph, weights, proposals):
+    """Args:
+        graph: nifty graph
+        weights: 1d numpy array
+        proposals: numpy array of shape [num_proposals, num_nodes]
+    """
+    ufd = nifty.ufd.ufd(size=graph.numberOfNodes)
+    ufd.reset()
+    for edge in graph.edges():
+        u, v = graph.uv(edge)
+        merge = all(proposals[:, u] == proposals[:, v])
+        if merge:
+            ufd.merge(u, v)
+
+    # fuseImpl
+    relabeling_set = {ufd.find(n) for n in graph.nodes()}
+    fm_graph = nifty.graph.undirectedGraph(len(relabeling_set))
+
+    node_to_dense = np.arange(0, graph.numberOfNodes)
+    for i, sparse in enumerate(relabeling_set):
+        node_to_dense[sparse] = i
+
+    for edge in graph.edges():
+        u, v = graph.uv(edge)
+        lu = node_to_dense[ufd.find(u)]
+        lv = node_to_dense[ufd.find(v)]
+        if lu != lv:
+            fm_graph.insertEdge(lu, lv)
+
+    fm_edges = fm_graph.numberOfEdges
+
+    if fm_edges == 0:
+        result = np.asarray([ufd.find(n) for n in graph.nodes()])
+    else:
+        fm_weights = np.zeros(fm_edges)
+        for edge in graph.edges():
+            u, v = graph.uv(edge)
+            lu = node_to_dense[ufd.find(u)]
+            lv = node_to_dense[ufd.find(v)]
+            assert lu < fm_graph.numberOfNodes
+            assert lv < fm_graph.numberOfNodes
+            if lu != lv:
+                e = fm_graph.findEdge(lu, lv)
+                assert e != -1
+                fm_weights[e] += weights[edge]
+
+        # fm_labels = multicut_kernighan_lin(fm_graph, fm_weights)
+        fm_labels = multicut_gaec(fm_graph, fm_weights)
+        for edge in graph.edges():
+            u, v = graph.uv(edge)
+            lu = node_to_dense[ufd.find(u)]
+            lv = node_to_dense[ufd.find(v)]
+            if lu != lv:
+                if fm_labels[lu] == fm_labels[lv]:
+                    ufd.merge(u, v)
+        result = np.asarray([ufd.find(n) for n in graph.nodes()])
+
+    return result
+
 
 
 class ccFusionMove:
