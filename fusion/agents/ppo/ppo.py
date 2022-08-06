@@ -9,14 +9,16 @@ import torch.distributions as dist
 from torch.distributions.transforms import AffineTransform, TanhTransform
 from torch.distributions.transformed_distribution import TransformedDistribution
 
-from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
+
+from tqdm import tqdm
 
 from bbaselines.utils.mpi_tools import proc_id, setup_torch_for_mpi, sync_params, num_procs, mpi_avg_grads, mpi_avg
 from bbaselines.utils.logx import EpochLogger
 
 import fusion.io
 from fusion.networks import *
-from fusion.agents.core import GaussianActor, Critic
+from fusion.agents.core import GaussianActor
 from fusion.agents.buffer import RolloutBuffer, count_vars
 
 
@@ -30,15 +32,31 @@ class Critic(nn.Module):
             hidden_dims=[2048, 1024],
             output_dim=1
         )
+        self.act_dim = act_dim
 
     def forward(self, obs):
         vals = self.v_net(obs)
+        out = vals
         if isinstance(vals, Data):
             vals = vals.out
+        if vals.shape[0] > self.act_dim:
+            import ipdb; ipdb.set_trace()
         vals = vals.flatten() if vals.ndim == 2 else vals
         vals = self.mlp(vals)
         return torch.squeeze(vals, -1) # Critical to ensure v has right shape.
 
+def batch_graph_attr(graphs, attr):
+    import ipdb; ipdb.set_trace()
+    batch_size = graphs.num_graphs
+    X = []
+    for i in range(batch_size):
+        x = graphs.get_observation(i)
+        x = eval(f'graphs[{i}].{attr}')
+        if x.shape[-1] == 1:
+            x = x.squeeze(-1)
+        X += [x]
+    X = torch.stack(X)
+    return X
 
 class SquashedGaussianActor(nn.Module):
 
@@ -49,14 +67,20 @@ class SquashedGaussianActor(nn.Module):
         log_std = torch.zeros(act_dim, dtype=torch.float32) # -0.5 * np.ones(act_dim, dtype=np.float32)
         self.log_std = torch.nn.Parameter(log_std)
         self.mu_net = network
+        self.act_dim = act_dim
 
     def _distribution(self, obs):
         mu = self.mu_net(obs)
-        if isinstance(mu, Data):
+        if isinstance(mu, Batch):
+            batch_size = mu.num_graphs
+            log_std = torch.stack([self.log_std.clone()] * batch_size)
+            mu = mu.get_batched_attr('out')
+        else:
             mu = mu.out
-        mu = mu.flatten() if mu.ndim == 2 else mu
-        # log_std = torch.clamp(self.log_std, LOG_STD_MIN, LOG_STD_MAX)
-        log_std = self.log_std
+            if mu.shape[-1] == 1:
+                mu = mu.squeeze(-1)
+            # log_std = torch.clamp(self.log_std, LOG_STD_MIN, LOG_STD_MAX)
+            log_std = self.log_std
         std = torch.exp(log_std)
         base_distribution = dist.Normal(mu, std)
         transformed_dist = TransformedDistribution(
@@ -91,7 +115,8 @@ class PPOAgent(nn.Module):
         train_critic_iters=80,
         train_policy_iters=80,
         target_kl=0.01,
-        clip_ratio=0.2
+        clip_ratio=0.2,
+        batch_size=2
     ):
         """Args:
             action_space_type: str {'continous', 'discrete'}
@@ -112,6 +137,7 @@ class PPOAgent(nn.Module):
         self.train_policy_iters = train_policy_iters
         self.target_kl = target_kl
         self.clip_ratio = clip_ratio
+        self.batch_size = batch_size
 
     def step(self, obs):
         with torch.no_grad():
@@ -127,9 +153,7 @@ class PPOAgent(nn.Module):
     def update(self):
         # Set up function for computing PPO policy loss
         def compute_loss_pi(data):
-            # obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
-            next(data)
-            import ipdb; ipdb.set_trace()
+            obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
             # Policy loss
             pi, logp = self.pi(obs, act)
@@ -141,7 +165,7 @@ class PPOAgent(nn.Module):
 
             # Useful extra info
             approx_kl = (logp_old - logp).mean().item()
-            ent = pi.entropy().mean().item()
+            ent = 0 #pi.entropy().mean().item()
             clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
             clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
             pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
@@ -153,22 +177,46 @@ class PPOAgent(nn.Module):
             obs, ret = data['obs'], data['ret']
             return ((self.v(obs) - ret)**2).mean()
 
-        data = self.buf.get()
+        data_generator = self.buf.get(batch_size=self.batch_size)
 
         # Get loss and info values before update
-        pi_l_old, pi_info_old = compute_loss_pi(data)
-        pi_l_old = pi_l_old.item()
-        v_l_old = compute_loss_v(data).item()
+        # pi_l_old, pi_info_old = compute_loss_pi(data)
+        # pi_l_old = pi_l_old.item()
+        # v_l_old = compute_loss_v(data).item()
+
+        diagnostics = {
+            'policy_loss': 0.0,
+            'kl': 0.0,
+            'ent': 0.0,
+            'cf': 0.0,
+            'value_loss': 0.0
+        }
 
         # Train policy with a multiple steps of gradient descent
         for i in range(self.train_policy_iters):
+            data_generator = self.buf.get(batch_size=self.batch_size)
             self.pi_optimizer.zero_grad()
-            loss_pi, pi_info = compute_loss_pi(data)
-            kl = mpi_avg(pi_info['kl'])
+            kl = 0.0
+            for j, data in enumerate(data_generator):
+                loss_pi, pi_info = compute_loss_pi(data)
+                print(i, loss_pi)
+                kl += mpi_avg(pi_info['kl'])
+                # if kl > 1.5 * self.target_kl:
+                #     self.logger.log(f'Early stopping at step {i}{j} due to reaching max kl with {kl}.')
+                #     break
+                loss_pi.backward()
+                # mpi_avg_grads(self.pi)    # average grads across MPI processes
+                
+                if i == self.train_policy_iters - 1:
+                    diagnostics['policy_loss'] += (loss_pi.item() / (j+1))
+                    diagnostics['kl'] += (pi_info['kl'] / (j+1))
+                    diagnostics['ent'] += (pi_info['ent'] / (j+1))
+                    diagnostics['cf'] += (pi_info['cf'] / (j+1))
+
+            kl = kl / (j+1)
             if kl > 1.5 * self.target_kl:
-                self.logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                self.logger.log(f'Early stopping at step {i}{j} due to reaching max kl with {kl}.')
                 break
-            loss_pi.backward()
             mpi_avg_grads(self.pi)    # average grads across MPI processes
             self.pi_optimizer.step()
 
@@ -176,18 +224,25 @@ class PPOAgent(nn.Module):
 
         # Value function learning
         for i in range(self.train_critic_iters):
-            self.v_optimizer.zero_grad()
-            loss_v = compute_loss_v(data)
-            loss_v.backward()
-            mpi_avg_grads(self.v)    # average grads across MPI processes
-            self.v_optimizer.step()
+            data_generator = self.buf.get(batch_size=self.batch_size)
+            for j, data in enumerate(data_generator):
+                self.v_optimizer.zero_grad()
+                loss_v = compute_loss_v(data)
+                loss_v.backward()
+                mpi_avg_grads(self.v)    # average grads across MPI processes
+                self.v_optimizer.step()
+
+                if i == self.train_critic_iters - 1:
+                    diagnostics['value_loss'] += (loss_v.item() / (j+1))
 
         # Log changes from update
-        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
-        self.logger.store(LossPi=pi_l_old, LossV=v_l_old,
-                          KL=kl, Entropy=ent, ClipFrac=cf,
-                          DeltaLossPi=(loss_pi.item() - pi_l_old),
-                          DeltaLossV=(loss_v.item() - v_l_old))
+        self.logger.store(
+            LossPi=diagnostics['policy_loss'],
+            LossV=diagnostics['value_loss'],
+            KL=diagnostics['kl'],
+            Entropy=diagnostics['ent'],
+            ClipFrac=diagnostics['cf']
+        )
 
 
 def environment_loop(
@@ -206,7 +261,6 @@ def environment_loop(
     observation, ep_return, ep_len = timestep.observation, 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
-    from tqdm import tqdm
     for epoch in range(epochs):
         for t in tqdm(range(local_steps_per_epoch)):
             action, value, log_prob = agent.step(observation)
@@ -219,7 +273,7 @@ def environment_loop(
             ep_len += 1
 
             agent.buf.store(
-                next_observation,
+                next_observation.clone(),
                 action,
                 reward,
                 value,
@@ -252,10 +306,11 @@ def environment_loop(
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, epoch)
+            pass
+            # logger.save_state({'env': env}, epoch)
 
-        # Perform VPG update!
         agent.update()
+        agent.buf.reset()
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)

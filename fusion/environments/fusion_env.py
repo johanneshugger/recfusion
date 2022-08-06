@@ -60,9 +60,9 @@ class RecursiveFusionEnv:
         proposals = np.stack([self.current_solution, proposal])
         labels = ccfusion(self.ngraph, self.weights, proposals)
         self.current_solution = labels
-        reward = energy(self.ngraph, self.weights, labels) - self.energy
-        # print('Energy: ', reward + self.energy)
-        # print('Reward: ', reward)
+        reward = np.abs(self.energy - energy(self.ngraph, self.weights, labels))
+        self.energy = self.energy - reward
+        # print(self._step, 'Reward', reward, 'Energy: ', self.energy)
         observation = self._observation(labels)
         timestep = TimeStep(
             done=False if self._step < self.num_steps else True,

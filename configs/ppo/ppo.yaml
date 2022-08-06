@@ -1,0 +1,55 @@
+# General parameters
+seed: [0, 10, 20]
+num_cpu: 1
+datestamp: True
+data_dir: 'runs/test'
+
+# Environment loop parameters
+epochs: 20
+steps_per_epoch: 20  # number of interaction steps (state-action paris) for agent and env in each epoch
+max_ep_len: 20  # max length of trajectory 
+save_freq: 10
+
+env_kwargs:
+  io_function: 'load_single_opengm_benchmark_graph'
+  filepath: 'data/seg-3d-300/graphs/gm_knott_3d_074.npy'
+  proposal_solver: 'multicut_gaec'
+  subroutine_solver: 'multicut_gaec'
+  num_steps: 10  # Number of steps until env termination
+
+agent:
+  - train_critic_iters: 80
+    train_policy_iters: 80
+    clip_ratio: 0.2
+    target_kl: 0.05
+    batch_size: 10
+
+rollout_buffer:
+  - discount: 0.99
+    lam: 0.97
+
+policy_network:
+  name: 'TgGCN'
+  kwargs:
+    in_features: 2
+    hidden_feat: 256
+    out_features: 1
+    num_layers: 4
+
+critic_network:
+  name: 'TgGCN'
+  kwargs:
+    in_features: 2
+    hidden_feat: 256
+    out_features: 1
+    num_layers: 4
+ 
+policy_optimizer:
+  name: 'Adam'
+  kwargs:
+    lr: 0.000003  # 3e-5
+
+critic_optimizer:
+  name: 'Adam'
+  kwargs:
+    lr: 0.001  # 1e-3

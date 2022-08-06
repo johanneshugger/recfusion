@@ -3,16 +3,16 @@ import torch.nn as nn
 import numpy as np
 
 
-class Critic(nn.Module):
-
-    def __init__(self, net):
-        super().__init__()
-        self.v_net = net
-
-    def forward(self, obs):
-        vals = self.v_net(obs)
-        import ipdb; ipdb.set_trace()
-        return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
+# class Critic(nn.Module):
+# 
+#     def __init__(self, net):
+#         super().__init__()
+#         self.v_net = net
+# 
+#     def forward(self, obs):
+#         vals = self.v_net(obs)
+#         import ipdb; ipdb.set_trace()
+#         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
 
 
 class GaussianActor(nn.Module):

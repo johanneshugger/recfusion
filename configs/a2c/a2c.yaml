@@ -1,0 +1,50 @@
+seed: [0, 10]
+epochs: 5
+steps_per_epoch: 4000
+discount: 0.99
+lam: 0.97
+max_ep_len: 1000
+save_freq: 10
+num_cpu: 2
+datestamp: True
+data_dir: 'runs/test'
+env_name: 'CartPole-v1'
+
+actor_critic_config:
+  - action_space_type: 'discrete'
+    action_space_dim: 2
+    train_v_iters: 200
+  - action_space_type: 'discrete'
+    action_space_dim: 2
+    train_v_iters: 400
+
+pi_net_config:
+  name: 'MLP'
+  kwargs:
+    input_dim: 4
+    hidden_dims: [16, 32, 16]
+    output_dim: 2
+    activation: 'ReLU'
+    final_activation: 'Identity'
+
+pi_optimizer_config:
+  name: 'Adam'
+  kwargs:
+    lr: 0.0003  # 3e-4
+
+v_optimizer_config:
+  name: 'Adam'
+  kwargs:
+    lr: 0.001  # 1e-3
+
+v_net_config:
+  name: 'MLP'
+  kwargs:
+    input_dim: 4 
+    hidden_dims: [16, 32, 16]
+    output_dim: 1 
+    activation: 'ReLU'
+    final_activation: 'Identity'
+ 
+logger_kwargs:
+  output_dir: 'runs/test'
