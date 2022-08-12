@@ -20,6 +20,7 @@ import fusion.io
 from fusion.networks import *
 from fusion.agents.core import GaussianActor
 from fusion.agents.buffer import RolloutBuffer, count_vars
+from fusion.utils.data_utils import ObservationBatch
 
 
 class Critic(nn.Module):
@@ -27,22 +28,23 @@ class Critic(nn.Module):
     def __init__(self, net, act_dim):
         super().__init__()
         self.v_net = net
-        self.mlp = MLP(
-            input_dim=act_dim,
-            hidden_dims=[2048, 1024],
-            output_dim=1
-        )
-        self.act_dim = act_dim
+        # self.mlp = MLP(
+        #     input_dim=act_dim,
+        #     hidden_dims=[2048, 1024],
+        #     output_dim=1
+        # )
+        # self.act_dim = act_dim
 
     def forward(self, obs):
         vals = self.v_net(obs)
-        out = vals
-        if isinstance(vals, Data):
-            vals = vals.out
-        if vals.shape[0] > self.act_dim:
-            import ipdb; ipdb.set_trace()
-        vals = vals.flatten() if vals.ndim == 2 else vals
-        vals = self.mlp(vals)
+        import ipdb; ipdb.set_trace()
+        # out = vals
+        # if isinstance(vals, Data):
+        #     vals = vals.out
+        # if vals.shape[0] > self.act_dim:
+        #     import ipdb; ipdb.set_trace()
+        # vals = vals.flatten() if vals.ndim == 2 else vals
+        # vals = self.mlp(vals)
         return torch.squeeze(vals, -1) # Critical to ensure v has right shape.
 
 def batch_graph_attr(graphs, attr):
@@ -60,27 +62,21 @@ def batch_graph_attr(graphs, attr):
 
 class SquashedGaussianActor(nn.Module):
 
-    def __init__(self, network, act_dim):
+    def __init__(self, mu_net, variance_net):
         super().__init__()
-        # State-independent log standard deviation
-        # TODO: implement optional state-dependent log std
-        log_std = torch.zeros(act_dim, dtype=torch.float32) # -0.5 * np.ones(act_dim, dtype=np.float32)
-        self.log_std = torch.nn.Parameter(log_std)
-        self.mu_net = network
-        self.act_dim = act_dim
+        # Removed state-independent log standard deviation
+        # due to problems with dimensionality of different action spaces (i.e. graphs)
+        # log_std = torch.zeros(act_dim, dtype=torch.float32) # -0.5 * np.ones(act_dim, dtype=np.float32)
+        # self.log_std = torch.nn.Parameter(log_std)
+        self.log_std_net = variance_net
+        self.mu_net = mu_net 
 
     def _distribution(self, obs):
         mu = self.mu_net(obs)
-        if isinstance(mu, Batch):
-            batch_size = mu.num_graphs
-            log_std = torch.stack([self.log_std.clone()] * batch_size)
-            mu = mu.get_batched_attr('out')
-        else:
-            mu = mu.out
-            if mu.shape[-1] == 1:
-                mu = mu.squeeze(-1)
-            # log_std = torch.clamp(self.log_std, LOG_STD_MIN, LOG_STD_MAX)
-            log_std = self.log_std
+        log_std = self.log_std_net(obs)
+        assert isinstance(mu, ObservationBatch) and isinstance(log_std, ObservationBatch)
+        mu = mu.get_batched_attr('out')
+        log_std = log_std.get_batched_attr('out')
         std = torch.exp(log_std)
         base_distribution = dist.Normal(mu, std)
         transformed_dist = TransformedDistribution(
@@ -108,7 +104,8 @@ class PPOAgent(nn.Module):
         self,
         actor,
         critic,
-        actor_optimizer,
+        mu_optimizer,
+        variance_optimizer,
         critic_optimizer,
         buf,
         logger=None,    
@@ -131,7 +128,8 @@ class PPOAgent(nn.Module):
         )
         self.buf = buf
 
-        self.pi_optimizer = actor_optimizer
+        self.mu_optimizer = mu_optimizer
+        self.variance_optimizer = variance_optimizer
         self.v_optimizer = critic_optimizer
         self.train_critic_iters = train_critic_iters
         self.train_policy_iters = train_policy_iters
@@ -145,6 +143,7 @@ class PPOAgent(nn.Module):
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
+        import ipdb; ipdb.set_trace()
         return a.numpy(), v.numpy(), logp_a.numpy()
 
     def act(self, obs):
@@ -218,7 +217,8 @@ class PPOAgent(nn.Module):
                 self.logger.log(f'Early stopping at step {i}{j} due to reaching max kl with {kl}.')
                 break
             mpi_avg_grads(self.pi)    # average grads across MPI processes
-            self.pi_optimizer.step()
+            self.mu_optimizer.step()
+            self.variance_optimizer.step()
 
         self.logger.store(StopIter=i)
 
@@ -257,13 +257,19 @@ def environment_loop(
 ):
     # Prepare for interaction with environment
     start_time = time.time()
-    timestep = env.reset()
-    observation, ep_return, ep_len = timestep.observation, 0, 0
+    # timestep = env.reset()
+    # observation, ep_return, ep_len = timestep.observation, 0, 0
+    timesteps = env.reset()
+    observations = [timestep.observation for timestep in timesteps]
+    ep_return, ep_len = np.zeros(env.n_envs), 0
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in tqdm(range(local_steps_per_epoch)):
-            action, value, log_prob = agent.step(observation)
+            action, value, log_prob = agent.step(
+                ObservationBatch.from_data_list(observations)
+            )
+            import ipdb; ipdb.set_trace()
             next_timestep = env.step(action)
             next_observation = next_timestep.observation
             reward = next_timestep.reward
@@ -330,9 +336,11 @@ def environment_loop(
 
 def build_ppo_agent(
     agent,
-    policy_network,
+    mu_network,
+    variance_network,
     critic_network,
-    policy_optimizer,
+    mu_optimizer,
+    variance_optimizer,
     critic_optimizer,
     steps_per_epoch,
     local_steps_per_epoch,
@@ -340,30 +348,42 @@ def build_ppo_agent(
     act_dim,
     discount,
     lam,
-    logger
+    logger,
+    num_envs
 ):
-    policy_network = eval(policy_network['name'])(**policy_network['kwargs'])
+    # policy_network = eval(policy_network['name'])(**policy_network['kwargs'])
+    mu_network = eval(mu_network['name'])(**mu_network['kwargs'])
+    variance_network = eval(variance_network['name'])(**variance_network['kwargs'])
     critic_network = eval(critic_network['name'])(**critic_network['kwargs'])
 
     # Set up optimizers for policy and value function
-    policy_optimizer = getattr(optim, policy_optimizer['name'])(
-        policy_network.parameters(), **policy_optimizer['kwargs'] 
+    # policy_optimizer = getattr(optim, policy_optimizer['name'])(
+    #     policy_network.parameters(), **policy_optimizer['kwargs'] 
+    # )
+    mu_optimizer = getattr(optim, mu_optimizer['name'])(
+        mu_network.parameters(), **mu_optimizer['kwargs'] 
+    )
+    variance_optimizer = getattr(optim, variance_optimizer['name'])(
+        variance_network.parameters(), **variance_optimizer['kwargs'] 
     )
     critic_optimizer = getattr(optim, critic_optimizer['name'])(
         critic_network.parameters(), **critic_optimizer['kwargs'] 
     )
 
     # Set up actor and critic
-    actor = SquashedGaussianActor(policy_network, act_dim)
+    actor = SquashedGaussianActor(mu_network, variance_network)
     critic = Critic(critic_network, act_dim)
 
     # Set up experience buffer
-    buf = RolloutBuffer(act_dim, local_steps_per_epoch, discount, lam)
+    buf = RolloutBuffer(
+        act_dim, local_steps_per_epoch, num_envs, discount, lam
+    )
 
     agent = PPOAgent(
         actor=actor,
         critic=critic,
-        actor_optimizer=policy_optimizer,
+        mu_optimizer=mu_optimizer,
+        variance_optimizer=variance_optimizer,
         critic_optimizer=critic_optimizer,
         buf=buf,
         logger=logger,
@@ -378,13 +398,16 @@ def ppo(
     epochs=50,
     steps_per_epoch=4000,
     max_ep_len=1000,
+    num_envs=4,
     save_freq=10,
     agent=dict(),
     rollout_buffer=dict(),
     critic_network=dict(),
-    policy_network=dict(),
+    mu_network=dict(),
+    variance_network=dict(),
     critic_optimizer=dict(),
-    policy_optimizer=dict(),
+    mu_optimizer=dict(),
+    variance_optimizer=dict(),
     logger_kwargs=dict(),
 ):
     # Set variables
@@ -396,7 +419,7 @@ def ppo(
     lam = rollout_buffer['lam']
 
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
-    setup_torch_for_mpi()
+    # setup_torch_for_mpi()
 
     # Set up logger and save configuration
     logger = EpochLogger(**logger_kwargs)
@@ -409,16 +432,18 @@ def ppo(
 
     # Instantiate environment
     env = env_fn()
-    act_dim = env.action_space_dim()
+    act_dim = env.action_dim()
 
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
 
     # Build actor-critic module
     agent = build_ppo_agent(
         agent,
-        policy_network,
+        mu_network,
+        variance_network,
         critic_network,
-        policy_optimizer,
+        mu_optimizer,
+        variance_optimizer,
         critic_optimizer,
         steps_per_epoch,
         local_steps_per_epoch,
@@ -426,7 +451,8 @@ def ppo(
         act_dim,
         discount,
         lam,
-        logger
+        logger,
+        num_envs
     )
 
     # Sync params across processes

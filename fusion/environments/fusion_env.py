@@ -7,6 +7,7 @@ from elf.segmentation.multicut import multicut_kernighan_lin, multicut_gaec, mul
 
 from fusion.utils import pyg_to_nifty, TimeStep
 from fusion.cc.ccfusion import ccfusion
+from fusion.io.opengm_benchmark import load_single_opengm_benchmark_graph
 
 
 def energy(ngraph, weights, labels):
@@ -16,6 +17,40 @@ def energy(ngraph, weights, labels):
         if labels[u] != labels[v]:
             energy += weights[e]
     return energy
+
+
+def make_env(
+        benchmark,
+        filepath,
+        proposal_solver,
+        subroutine_solver,
+        num_steps
+):
+    """
+    Make environment function.
+    Args:
+      benchmark: str {'opengm', TODO}
+      filepath: str, path to graph
+      proposal_solver: str, multicut solver
+      subroutine_solver: str, multicut solver
+      num_steps: int, number of steps until episode terminates
+    """
+    if benchmark == 'opengm':
+        graph_loader = load_single_opengm_benchmark_graph
+    else:
+        raise NotImplementedError
+
+    pggraph = graph_loader(filepath)
+    ngraph, edge_weights = pyg_to_nifty(pggraph)
+    env = RecursiveFusionEnv(
+        ngraph,
+        edge_weights,
+        pggraph,
+        proposal_solver,
+        subroutine_solver,
+        num_steps
+    )
+    return env
 
 
 class RecursiveFusionEnv:
@@ -100,7 +135,7 @@ class RecursiveFusionEnv:
  
         return line_graph
 
-    def action_space_dim(self):
+    def action_dim(self):
         return self.pggraph.edge_attr.shape[0]
 
 if __name__ == '__main__':

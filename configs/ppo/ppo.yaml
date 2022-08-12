@@ -1,21 +1,44 @@
 # General parameters
 seed: [0, 10, 20]
-num_cpu: 1
+num_cpu: 4
 datestamp: True
 data_dir: 'runs/test'
 
 # Environment loop parameters
 epochs: 20
-steps_per_epoch: 20  # number of interaction steps (state-action paris) for agent and env in each epoch
-max_ep_len: 20  # max length of trajectory 
+steps_per_epoch: 50  # number of interaction steps (state-action paris) for agent and env in each epoch
+max_ep_len: 50  # max length of trajectory 
 save_freq: 10
 
+num_envs: 4  # should be same num_cpu/num_workers
+
 env_kwargs:
-  io_function: 'load_single_opengm_benchmark_graph'
-  filepath: 'data/seg-3d-300/graphs/gm_knott_3d_074.npy'
-  proposal_solver: 'multicut_gaec'
-  subroutine_solver: 'multicut_gaec'
-  num_steps: 10  # Number of steps until env termination
+  - - benchmark: 'opengm'
+      filepath: 'data/seg-3d-300/graphs/gm_knott_3d_074.npy'
+      proposal_solver: 'multicut_gaec'
+      subroutine_solver: 'multicut_gaec'
+      num_steps: 10
+    - benchmark: 'opengm'
+      filepath: 'data/seg-3d-300/graphs/gm_knott_3d_074.npy'
+      proposal_solver: 'multicut_gaec'
+      subroutine_solver: 'multicut_gaec'
+      num_steps: 10
+    - benchmark: 'opengm'
+      filepath: 'data/seg-3d-300/graphs/gm_knott_3d_074.npy'
+      proposal_solver: 'multicut_gaec'
+      subroutine_solver: 'multicut_gaec'
+      num_steps: 10
+    - benchmark: 'opengm'
+      filepath: 'data/seg-3d-300/graphs/gm_knott_3d_074.npy'
+      proposal_solver: 'multicut_gaec'
+      subroutine_solver: 'multicut_gaec'
+      num_steps: 10
+ 
+  # io_function: 'load_single_opengm_benchmark_graph'
+  # filepath: 'data/seg-3d-300/graphs/gm_knott_3d_074.npy'
+  # proposal_solver: 'multicut_gaec'
+  # subroutine_solver: 'multicut_gaec'
+  # num_steps: 10  # Number of steps until env termination
 
 agent:
   - train_critic_iters: 80
@@ -28,26 +51,60 @@ rollout_buffer:
   - discount: 0.99
     lam: 0.97
 
-policy_network:
-  name: 'TgGCN'
+mu_network:
+  name: 'PolicyGCN'
   kwargs:
-    in_features: 2
-    hidden_feat: 256
-    out_features: 1
+    in_channels: 2
+    hidden_channels: 146
+    out_channels: 146
     num_layers: 4
+    dropout: 0.0
+    batch_norm: true
+    residual: true
+    mlp_in_channels: 146
+    mlp_hidden_channels: [73]
+    mlp_out_channels: 1
+
+variance_network:
+  name: 'PolicyGCN'
+  kwargs:
+    in_channels: 2
+    hidden_channels: 146
+    out_channels: 146
+    num_layers: 4
+    dropout: 0.0
+    batch_norm: true
+    residual: true
+    mlp_in_channels: 146
+    mlp_hidden_channels: [73]
+    mlp_out_channels: 1
 
 critic_network:
-  name: 'TgGCN'
+  name: 'ValueGCN'
   kwargs:
-    in_features: 2
-    hidden_feat: 256
-    out_features: 1
+    in_channels: 2
+    hidden_channels: 146
+    out_channels: 146
     num_layers: 4
+    dropout: 0.0
+    batch_norm: true
+    residual: true
+    readout: 'mean'
+    mlp_in_channels: 146
+    mlp_hidden_channels: [73]
+    mlp_out_channels: 1
  
-policy_optimizer:
+mu_optimizer:
   name: 'Adam'
   kwargs:
-    lr: 0.000003  # 3e-5
+    lr: 0.000001  # 3e-5
+    weight_decay: 0.0001
+
+variance_optimizer:
+  name: 'Adam'
+  kwargs:
+    lr: 0.000001  # 3e-5
+    weight_decay: 0.0001
 
 critic_optimizer:
   name: 'Adam'

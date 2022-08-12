@@ -7,7 +7,7 @@ from bbaselines.utils.mpi_tools import mpi_fork
 from bbaselines.utils.experiment_utils import setup_logger_kwargs
 
 from fusion.io import *
-from fusion.environments import RecursiveFusionEnv
+from fusion.environments import RecursiveFusionEnv, SubprocessEnvWrapper
 from fusion.utils.conversion_utils import pyg_to_nifty
 
 
@@ -38,22 +38,22 @@ def run_fusion_experiment(
     kwargs['logger_kwargs'] = setup_logger_kwargs(exp_name, seed, data_dir, datestamp)
 
     # Set up environment
-    io_fn = kwargs['env_kwargs']['io_function']
-    filepath = kwargs['env_kwargs']['filepath']
-    pggraph = eval(io_fn)(filepath)
-    ngraph, edge_weights = pyg_to_nifty(pggraph)
-    env_kwargs = {
-        'ngraph': ngraph,
-        'edge_weights': edge_weights,
-        'pggraph': pggraph,
-        'proposal_solver': kwargs['env_kwargs']['proposal_solver'],
-        'subroutine_solver': kwargs['env_kwargs']['subroutine_solver'],
-        'num_steps': kwargs['env_kwargs']['num_steps']
-    }
+    # io_fn = kwargs['env_kwargs']['io_function']
+    # filepath = kwargs['env_kwargs']['filepath']
+    # pggraph = eval(io_fn)(filepath)
+    # ngraph, edge_weights = pyg_to_nifty(pggraph)
+    # env_kwargs = {
+    #     'ngraph': ngraph,
+    #     'edge_weights': edge_weights,
+    #     'pggraph': pggraph,
+    #     'proposal_solver': kwargs['env_kwargs']['proposal_solver'],
+    #     'subroutine_solver': kwargs['env_kwargs']['subroutine_solver'],
+    #     'num_steps': kwargs['env_kwargs']['num_steps']
+    # }
+    # kwargs['env_fn'] = lambda : RecursiveFusionEnv(**env_kwargs)
+    env_kwargs = kwargs['env_kwargs']
+    kwargs['env_fn'] = lambda : SubprocessEnvWrapper(env_kwargs)
     del kwargs['env_kwargs']
-    kwargs['env_fn'] = lambda : RecursiveFusionEnv(**env_kwargs)
-    for k, v in kwargs.items():
-        print(k, v)
 
     # Fork into multiple processes
     # mpi_fork(num_cpu)

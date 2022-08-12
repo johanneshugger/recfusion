@@ -4,6 +4,7 @@ import yaml
 import fusion.agents as agents
 from bbaselines.utils.experiment_utils import VariantGenerator
 from fusion.utils.run_utils import run_fusion_experiment
+from mpi4py import MPI
 
 
 BASELINE_ALGORITHMS = ['a2c', 'ppo']
@@ -41,6 +42,10 @@ def parse_args(args):
     return arg_dict
 
 
+def interrupt():
+    raise KeyboardInterrupt
+
+
 if __name__ == '__main__':
     baseline = sys.argv[1]
     assert baseline in BASELINE_ALGORITHMS
@@ -54,4 +59,9 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError
 
-    setup_and_run(baseline_fn, config)
+    try:
+        setup_and_run(baseline_fn, config)
+    except KeyboardInterrupt:
+        import signal
+        MPI.COMM_WORLD.Bcast(signal.signal(signal.SIGINT, interrupt), root=0)
+        MPI.COMM_WORLD.Abort()
