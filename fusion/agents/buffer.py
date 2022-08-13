@@ -48,7 +48,8 @@ class RolloutBuffer:
     """
 
     def __init__(self, action_dim, buffer_size, num_envs, gamma=0.99, lam=0.95):
-        self.action_dim = action_dim[0]
+        assert len(action_dim) == num_envs
+        self.action_dim = action_dim
         self.buffer_size = buffer_size
         self.num_envs = num_envs
         self.gamma, self.lam = gamma, lam
@@ -56,30 +57,40 @@ class RolloutBuffer:
 
     def reset(self) -> None:
         self.ptr, self.path_start_idx = 0, 0
-        self.observations = [[] * self.num_envs]
-        self.actions = np.zeros((self.buffer_size, self.action_dim), dtype=np.float32)
-        self.advantages = np.zeros(self.buffer_size, dtype=np.float32)
-        self.rewards = np.zeros(self.buffer_size, dtype=np.float32)
-        self.returns = np.zeros(self.buffer_size, dtype=np.float32)
-        self.values = np.zeros(self.buffer_size, dtype=np.float32)
-        self.log_probs = np.zeros(self.buffer_size, dtype=np.float32)
+        self.observations = []
+        self.actions = [
+            np.zeros((self.buffer_size, act_dim), dtype=np.float32)
+            for act_dim in self.action_dim
+        ]
+        self.advantages = np.zeros((self.buffer_size, self.num_envs), dtype=np.float32)
+        self.rewards = np.zeros((self.buffer_size, self.num_envs), dtype=np.float32)
+        self.returns = np.zeros((self.buffer_size, self.num_envs), dtype=np.float32)
+        self.values = np.zeros((self.buffer_size, self.num_envs), dtype=np.float32)
+        self.log_probs = np.zeros((self.buffer_size, self.num_envs), dtype=np.float32)
 
     def store(self, obs, act, rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
         assert self.ptr < self.buffer_size     # buffer has to have room so you can store
+        if len(self.observations) == 0:
+            for i in range(self.num_envs):
+                self.observations.append([obs[i]])
+        else:
+            for i in range(self.num_envs):
+                self.observations[i].append(obs[i])
+        for i in range(self.num_envs):
+            self.actions[i][self.ptr] = act[i]
+
         # self.observations[self.ptr] = obs
-        self.observations.append(obs)
-        if hasattr(obs, 'out'):
-            print(obs)
-        self.actions[self.ptr] = act
+        # self.observations.append(obs)
+        # self.actions[self.ptr] = act
         self.rewards[self.ptr] = rew
         self.values[self.ptr] = val
         self.log_probs[self.ptr] = logp
         self.ptr += 1
 
-    def finish_path(self, last_value=0):
+    def finish_path(self, last_value):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -94,6 +105,7 @@ class RolloutBuffer:
         This allows us to bootstrap the reward-to-go calculation to account
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         """
+        import ipdb; ipdb.set_trace()
         path_slice = slice(self.path_start_idx, self.ptr)
         rewards = np.append(self.rewards[path_slice], last_value)
         values = np.append(self.values[path_slice], last_value)
@@ -106,7 +118,6 @@ class RolloutBuffer:
         self.returns[path_slice] = discount_cumsum(rewards, self.gamma)[:-1]
         self.path_start_idx = self.ptr
         
-
     def get(self, batch_size=5):
         assert self.ptr == self.buffer_size    # buffer has to be full before you can get
         # if not isinstance(self.observations, Batch):

@@ -11,14 +11,6 @@ from elf.segmentation.multicut import multicut_kernighan_lin, multicut_gaec
 from fusion.utils import pyg_to_nifty
 
 
-# def pyg_to_nifty(pyg_graph):
-#     ngraph = nifty.graph.undirectedGraph(pyg_graph.num_nodes)
-#     uv_ids = pyg_graph.edge_index.T.numpy()
-#     ngraph.insertEdges(uv_ids)
-#     return ngraph
-#     # nifty.graph.drawGraph(ngraph)
-#     # pylab.show() 
-
 def ccfusion(graph, weights, proposals):
     """Args:
         graph: nifty graph
@@ -88,7 +80,7 @@ class ccFusionMove:
         """Args:
         graph: pytorch geometric graph with 'edge_attr' as weights
         """
-        self.graph = pyg_to_nifty(graph)
+        self.graph, _ = pyg_to_nifty(graph)
         self.ufd = nifty.ufd.ufd(size=self.graph.numberOfNodes)
         self.weights = self._get_weights(graph)
 
@@ -153,31 +145,7 @@ class ccFusionMove:
 
         return result
 
-        # proposals = torch.stack(proposals)
-        # contracted_graph = dgl.to_networkx(self.graph, edge_attrs=['w']).to_undirected()
-        # uv = [e for e in contracted_graph.edges()]
-        # node_mapping = dict(
-        #     zip(sorted(contracted_graph), sorted(contracted_graph))
-        # )
-        # print(uv)
-        # for u, v in uv:
-        #     print(u, v)
-        #     merge = proposals[:, u] == proposals[:, v]
-        #     print(proposals)
-        #     print(merge)
-        #     u, v = node_mapping[u], node_mapping[v]
-        #     if all(merge):
-        #         print(u, v)
-        #         contracted_graph = nx.contracted_edge(
-        #             contracted_graph,
-        #             (u, v),
-        #             self_loops=False,
-        #         )
-        #         node_mapping[v] = u
-        # import ipdb; ipdb.set_trace()
-
-
-if __name__ == '__main__':
+def test():
     edge_index = torch.tensor(
         [[0, 0, 1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 6, 6, 7, 7, 7, 8, 8],
          [3, 1, 0, 4, 2, 1, 5, 0, 6, 4, 1, 3, 7, 5, 2, 4, 8, 3, 7, 4, 6, 8, 5, 7]]
@@ -192,36 +160,11 @@ if __name__ == '__main__':
     current_solution = torch.tensor([1, 1, 1, 1, 1, 1, 0, 0, 0]).numpy()
     proposal = torch.tensor([1, 0, 2, 1, 0, 0, 1, 1, 1]).numpy()
     proposals = np.stack([current_solution, proposal])
-    fusion.fuse(proposals)
+    r1 = fusion.fuse(proposals)
 
-    # graph = nx.grid_2d_graph(3, 3)
-    # for e in graph.edges():
-    #     if e in {((0, 0), (1, 0)), ((0, 1), (1, 1)), ((1, 1), (1, 2)), ((2, 1), (2, 2))}:
-    #         graph[e[0]][e[1]]['w'] = np.array([-1])
-    #     else:
-    #         graph[e[0]][e[1]]['w'] = np.array([1])
-    # for n in graph.nodes():
-    #     graph.nodes[n]['pos'] = n
-    # nx.draw(graph, with_labels=True, font_weight='bold')
-    # labels = nx.get_edge_attributes(graph, 'w')
-    # pos = nx.spring_layout(graph)
-    # nx.draw(graph, pos, with_labels=True)
-    # nx.draw_networkx_edge_labels(graph, pos, edge_labels=labels)
-    # plt.show()
-    # g = torch_geometric.utils.from_networkx(graph)
-    # fusion = ccFusionMove(g)
+    ngraph, weights = pyg_to_nifty(pyg_graph)
+    r2 = ccfusion(ngraph, weights, proposals)
+    assert all(r1 == r2)
 
-    # graph = dgl.from_networkx(graph)
-    # graph.edata['w'] = torch.ones(24)
-    # graph.edata['w'][1] = -1
-    # graph.edata['w'][2] = -1
-    # graph.edata['w'][9] = -1
-    # graph.edata['w'][11] = -1
-    # graph.edata['w'][12] = -1
-    # graph.edata['w'][16] = -1
-    # graph.edata['w'][19] = -1
-    # graph.edata['w'][22] = -1
-    # t = graph.edges(form='all')
-    # for a, b, c in zip(t[0], t[1], t[2]):
-    #     print('src', a, 'dst', b, 'num', c, 'w', graph.edata['w'][c])
-    # fusion = ccFusionMove(graph)
+if __name__ == '__main__':
+    test()

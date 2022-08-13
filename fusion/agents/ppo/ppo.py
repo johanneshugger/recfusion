@@ -37,7 +37,7 @@ class Critic(nn.Module):
 
     def forward(self, obs):
         vals = self.v_net(obs)
-        import ipdb; ipdb.set_trace()
+        vals = torch.squeeze(vals.out, -1)
         # out = vals
         # if isinstance(vals, Data):
         #     vals = vals.out
@@ -45,7 +45,7 @@ class Critic(nn.Module):
         #     import ipdb; ipdb.set_trace()
         # vals = vals.flatten() if vals.ndim == 2 else vals
         # vals = self.mlp(vals)
-        return torch.squeeze(vals, -1) # Critical to ensure v has right shape.
+        return vals  # Critical to ensure v has right shape.
 
 def batch_graph_attr(graphs, attr):
     import ipdb; ipdb.set_trace()
@@ -143,7 +143,6 @@ class PPOAgent(nn.Module):
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
-        import ipdb; ipdb.set_trace()
         return a.numpy(), v.numpy(), logp_a.numpy()
 
     def act(self, obs):
@@ -269,17 +268,21 @@ def environment_loop(
             action, value, log_prob = agent.step(
                 ObservationBatch.from_data_list(observations)
             )
-            import ipdb; ipdb.set_trace()
-            next_timestep = env.step(action)
-            next_observation = next_timestep.observation
-            reward = next_timestep.reward
-            done = next_timestep.done
+            # next_timestep = env.step(action)
+            # next_observation = next_timestep.observation
+            # reward = next_timestep.reward
+            # done = next_timestep.done
+            env.step_async(action)
+            next_timestep = env.step_wait()
+            next_observation = [nt.observation for nt in next_timestep]
+            reward = np.stack([nt.reward for nt in next_timestep])
+            done = np.stack([nt.done for nt in next_timestep])
 
             ep_return += reward
             ep_len += 1
 
             agent.buf.store(
-                next_observation.clone(),
+                next_observation,
                 action,
                 reward,
                 value,
@@ -292,7 +295,7 @@ def environment_loop(
             observation = next_observation
 
             timeout = ep_len == max_ep_len
-            terminal = done or timeout
+            terminal = all(done) or timeout
             epoch_ended = t == local_steps_per_epoch-1
 
             if terminal or epoch_ended:
@@ -302,13 +305,19 @@ def environment_loop(
                 if timeout or epoch_ended:
                     _, value, _ = agent.step(observation)
                 else:
-                    value = 0
+                    # value = 0
+                    value = np.zeros(env.n_envs)
                 agent.buf.finish_path(value)
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_return, EpLen=ep_len)
-                timestep = env.reset()
-                observation, ep_return, ep_len = timestep.observation, 0, 0
+                # timestep = env.reset()
+                # observation, ep_return, ep_len = timestep.observation, 0, 0
+                timesteps = env.reset()
+                observations = [timestep.observation for timestep in timesteps]
+                ep_return, ep_len = np.zeros(env.n_envs), 0
+
+
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
