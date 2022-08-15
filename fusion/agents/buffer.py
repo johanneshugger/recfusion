@@ -105,24 +105,58 @@ class RolloutBuffer:
         This allows us to bootstrap the reward-to-go calculation to account
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         """
-        import ipdb; ipdb.set_trace()
         path_slice = slice(self.path_start_idx, self.ptr)
-        rewards = np.append(self.rewards[path_slice], last_value)
-        values = np.append(self.values[path_slice], last_value)
-        
-        # the next two lines implement GAE-Lambda advantage calculation
-        deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
-        self.advantages[path_slice] = discount_cumsum(deltas, self.gamma * self.lam)
-        
-        # the next line computes rewards-to-go, to be targets for the value function
-        self.returns[path_slice] = discount_cumsum(rewards, self.gamma)[:-1]
+        rewards = np.concatenate(
+            [self.rewards[path_slice], last_value.reshape(1, -1)]
+        )
+        values = np.concatenate(
+            [self.values[path_slice], last_value.reshape(1, -1)] 
+        )
+
+        # GAE-Lambda advantage estimation
+        deltas = rewards[:-1, :] + self.gamma * values[1:, :] - values[:-1, :]
+        for i in range(self.num_envs):
+            self.advantages[path_slice, i] = discount_cumsum(deltas[:, i], self.gamma * self.lam)
+            # rewards-to-go computation (to be targets for the value function)
+            self.returns[path_slice, i] = discount_cumsum(rewards[:, i], self.gamma)[:-1]
+            x = discount_cumsum(rewards[:, i], self.gamma)
+
+        # rewards = np.append(self.rewards[path_slice], last_value)
+        # values = np.append(self.values[path_slice], last_value)
+        # deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
+        # self.advantages[path_slice] = discount_cumsum(deltas, self.gamma * self.lam)
+        # self.returns[path_slice] = discount_cumsum(rewards, self.gamma)[:-1]
         self.path_start_idx = self.ptr
+
+#        last_values = last_values.clone().cpu().numpy().flatten()
+#        last_gae_lam = 0
+#        for step in reversed(range(self.buffer_size)):
+#            if step == self.buffer_size - 1:
+#                next_non_terminal = 1.0 - dones
+#                next_values = last_values
+#            else:
+#                next_non_terminal = 1.0 - self.episode_starts[step + 1]
+#                next_values = self.values[step + 1]
+#            delta = self.rewards[step] + self.gamma * next_values * next_non_terminal - self.values[step]
+#            last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+#            self.advantages[step] = last_gae_lam
+#        self.returns = self.advantages + self.values
+
+    def unravel(self):
+        self.rewards = self.rewards.flatten(order='F')
+        self.values = self.values.flatten(order='F')
+        self.log_probs = self.log_probs.flatten(order='F')
+        self.returns = self.returns.flatten(order='F')
+        self.advantages = self.advantages.flatten(order='F')
+        self.observations = [obs for obs_list in self.observations for obs in obs_list]
+        self.actions = [act for act_tensor in self.actions for act in act_tensor]
         
+ 
     def get(self, batch_size=5):
         assert self.ptr == self.buffer_size    # buffer has to be full before you can get
         # if not isinstance(self.observations, Batch):
         #     self.observations = ObservationBatch.from_data_list(self.observations)
-        indices = np.random.permutation(self.buffer_size)
+        indices = np.random.permutation(self.buffer_size * self.num_envs)
 
         start_idx = 0
         while start_idx < self.buffer_size:
@@ -137,7 +171,8 @@ class RolloutBuffer:
  
         data = dict(
             obs=[self.observations[i] for i in batch_inds],
-            act=self.actions[batch_inds],
+            act=[self.actions[i] for i in batch_inds],
+            # act=self.actions[batch_inds],
             # self.values[batch_inds].flatten(),
             logp=self.log_probs[batch_inds],
             adv=advantages,
